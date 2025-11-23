@@ -2,7 +2,7 @@
 # Makefile for ovl-restore tool
 
 CC = $(CROSS_COMPILE)gcc
-CFLAGS = -Wall -Wextra -O2 -I../../include/uapi
+CFLAGS = -Wall -Wextra -O2
 LDFLAGS =
 
 PROG = ovl-restore

@@ -27,7 +27,34 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
-#include <linux/overlayfs.h>
+#include <stdint.h>
+
+/*
+ * Overlayfs ioctl definitions
+ * (extracted from linux/overlayfs.h to avoid kernel header dependencies)
+ */
+#ifndef __aligned_u64
+#ifdef __x86_64__
+#define __aligned_u64 __attribute__((aligned(8))) uint64_t
+#else
+#define __aligned_u64 uint64_t
+#endif
+#endif
+
+struct ovl_restore_lower_args {
+	__aligned_u64 path_ptr;		/* Pointer to path string */
+	uint32_t path_len;		/* Length of path string */
+	uint32_t flags;			/* Reserved for future use, must be 0 */
+};
+
+struct ovl_is_restorable_args {
+	__aligned_u64 path_ptr;		/* Pointer to path string */
+	uint32_t path_len;		/* Length of path string */
+	uint32_t flags;			/* Reserved for future use, must be 0 */
+};
+
+#define OVL_IOC_RESTORE_LOWER _IOW('O', 1, struct ovl_restore_lower_args)
+#define OVL_IOC_IS_RESTORABLE _IOR('O', 2, struct ovl_is_restorable_args)
 
 static void usage(const char *progname)
 {
@@ -53,7 +80,7 @@ static int restore_lower(int fd, const char *path)
 	struct ovl_restore_lower_args args;
 	int ret;
 
-	args.path_ptr = (__u64)(unsigned long)path;
+	args.path_ptr = (uint64_t)(unsigned long)path;
 	args.path_len = strlen(path);
 	args.flags = 0;
 
@@ -71,7 +98,7 @@ static int is_restorable(int fd, const char *path)
 	struct ovl_is_restorable_args args;
 	int ret;
 
-	args.path_ptr = (__u64)(unsigned long)path;
+	args.path_ptr = (uint64_t)(unsigned long)path;
 	args.path_len = strlen(path);
 	args.flags = 0;
 
