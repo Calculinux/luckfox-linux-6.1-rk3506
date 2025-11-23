@@ -10,6 +10,7 @@
 #include <linux/mount.h>
 #include <linux/namei.h>
 #include <linux/uaccess.h>
+#include <linux/xattr.h>
 #include <uapi/linux/overlayfs.h>
 #include "overlayfs.h"
 
@@ -73,10 +74,20 @@ static int ovl_restore_lower_by_path(struct dentry *dentry,
 	/* Lock the parent directory */
 	inode_lock(upper_dir);
 
+	/* Check if user has permission to delete from parent directory
+	 * We check this BEFORE elevating credentials to prevent privilege escalation
+	 */
+	err = inode_permission(ovl_upper_mnt_userns(ofs), upper_dir,
+			       MAY_WRITE | MAY_EXEC);
+	if (err)
+		goto out_unlock;
+
 	/* Remove the whiteout with proper credentials */
 	old_cred = ovl_override_creds(dentry->d_sb);
 	err = vfs_unlink(ovl_upper_mnt_userns(ofs), upper_dir, upper_dentry, NULL);
 	revert_creds(old_cred);
+
+out_unlock:
 
 	inode_unlock(upper_dir);
 	dput(upper_parent);
@@ -130,7 +141,7 @@ long ovl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (!pathname)
 			return -ENOMEM;
 
-		if (copy_from_user(pathname, (char __user *)args.path_ptr,
+		if (copy_from_user(pathname, (char __user *)(uintptr_t)args.path_ptr,
 				   args.path_len)) {
 			kfree(pathname);
 			return -EFAULT;
