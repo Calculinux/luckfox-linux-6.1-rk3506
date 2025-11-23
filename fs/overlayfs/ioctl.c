@@ -15,25 +15,24 @@
 #include "overlayfs.h"
 
 /**
- * ovl_restore_lower_by_path - Restore visibility of a lower layer file
+ * ovl_check_restorable - Check if a path has a restorable whiteout
  * @dentry: overlay dentry
  * @pathname: path relative to overlay mount point
+ * @upper_dentry_out: optional pointer to store upper dentry (caller must dput)
+ * @path_out: optional pointer to store path (caller must path_put)
  *
- * This function removes a whiteout character device from the upper layer,
- * making the corresponding lower layer file visible again. It also
- * invalidates the dentry cache entry to ensure the change is immediately
- * visible.
+ * Checks if the given path has a whiteout in the upper layer that can be
+ * removed to restore the lower layer file.
  *
- * Returns 0 on success, negative error code on failure.
+ * Returns 0 if restorable, negative error code otherwise.
  */
-static int ovl_restore_lower_by_path(struct dentry *dentry,
-					const char *pathname)
+static int ovl_check_restorable(struct dentry *dentry, const char *pathname,
+				struct dentry **upper_dentry_out,
+				struct path *path_out)
 {
 	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
-	struct dentry *overlay_dentry, *upper_dentry, *upper_parent;
-	struct inode *upper_dir;
+	struct dentry *overlay_dentry, *upper_dentry;
 	struct path path;
-	const struct cred *old_cred;
 	int err;
 
 	/* Must have a writable upper layer */
@@ -67,6 +66,50 @@ static int ovl_restore_lower_by_path(struct dentry *dentry,
 		goto out_path_put;
 	}
 
+	/* Success - file is restorable */
+	if (upper_dentry_out)
+		*upper_dentry_out = dget(upper_dentry);
+	if (path_out)
+		*path_out = path;
+	else
+		path_put(&path);
+
+	return 0;
+
+out_path_put:
+	path_put(&path);
+	return err;
+}
+
+/**
+ * ovl_restore_lower_by_path - Restore visibility of a lower layer file
+ * @dentry: overlay dentry
+ * @pathname: path relative to overlay mount point
+ *
+ * This function removes a whiteout character device from the upper layer,
+ * making the corresponding lower layer file visible again. It also
+ * invalidates the dentry cache entry to ensure the change is immediately
+ * visible.
+ *
+ * Returns 0 on success, negative error code on failure.
+ */
+static int ovl_restore_lower_by_path(struct dentry *dentry,
+					const char *pathname)
+{
+	struct ovl_fs *ofs = OVL_FS(dentry->d_sb);
+	struct dentry *overlay_dentry, *upper_dentry, *upper_parent;
+	struct inode *upper_dir;
+	struct path path;
+	const struct cred *old_cred;
+	int err;
+
+	/* Check if file is restorable and get the path/upper_dentry */
+	err = ovl_check_restorable(dentry, pathname, &upper_dentry, &path);
+	if (err)
+		return err;
+
+	overlay_dentry = path.dentry;
+
 	/* Get the parent directory */
 	upper_parent = dget_parent(upper_dentry);
 	upper_dir = d_inode(upper_parent);
@@ -91,6 +134,7 @@ out_unlock:
 
 	inode_unlock(upper_dir);
 	dput(upper_parent);
+	dput(upper_dentry);
 
 	if (err)
 		goto out_path_put;
@@ -113,43 +157,76 @@ out_path_put:
  *
  * Currently supports:
  *   OVL_IOC_RESTORE_LOWER - Restore lower layer file visibility
+ *   OVL_IOC_IS_RESTORABLE - Check if file can be restored
  */
 long ovl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct dentry *dentry = file->f_path.dentry;
 	void __user *argp = (void __user *)arg;
-	struct ovl_restore_lower_args args;
+	struct ovl_restore_lower_args restore_args;
+	struct ovl_is_restorable_args restorable_args;
 	char *pathname;
 	long err;
 
 	switch (cmd) {
 	case OVL_IOC_RESTORE_LOWER:
 		/* Copy arguments from userspace */
-		if (copy_from_user(&args, argp, sizeof(args)))
+		if (copy_from_user(&restore_args, argp, sizeof(restore_args)))
 			return -EFAULT;
 
 		/* Validate flags (must be 0 for now) */
-		if (args.flags != 0)
+		if (restore_args.flags != 0)
 			return -EINVAL;
 
 		/* Validate path length */
-		if (args.path_len == 0 || args.path_len > PATH_MAX)
+		if (restore_args.path_len == 0 || restore_args.path_len > PATH_MAX)
 			return -EINVAL;
 
 		/* Allocate and copy path string */
-		pathname = kmalloc(args.path_len + 1, GFP_KERNEL);
+		pathname = kmalloc(restore_args.path_len + 1, GFP_KERNEL);
 		if (!pathname)
 			return -ENOMEM;
 
-		if (copy_from_user(pathname, (char __user *)(uintptr_t)args.path_ptr,
-				   args.path_len)) {
+		if (copy_from_user(pathname, (char __user *)(uintptr_t)restore_args.path_ptr,
+				   restore_args.path_len)) {
 			kfree(pathname);
 			return -EFAULT;
 		}
-		pathname[args.path_len] = '\0';
+		pathname[restore_args.path_len] = '\0';
 
 		/* Perform the operation */
 		err = ovl_restore_lower_by_path(dentry, pathname);
+
+		kfree(pathname);
+		return err;
+
+	case OVL_IOC_IS_RESTORABLE:
+		/* Copy arguments from userspace */
+		if (copy_from_user(&restorable_args, argp, sizeof(restorable_args)))
+			return -EFAULT;
+
+		/* Validate flags (must be 0 for now) */
+		if (restorable_args.flags != 0)
+			return -EINVAL;
+
+		/* Validate path length */
+		if (restorable_args.path_len == 0 || restorable_args.path_len > PATH_MAX)
+			return -EINVAL;
+
+		/* Allocate and copy path string */
+		pathname = kmalloc(restorable_args.path_len + 1, GFP_KERNEL);
+		if (!pathname)
+			return -ENOMEM;
+
+		if (copy_from_user(pathname, (char __user *)(uintptr_t)restorable_args.path_ptr,
+				   restorable_args.path_len)) {
+			kfree(pathname);
+			return -EFAULT;
+		}
+		pathname[restorable_args.path_len] = '\0';
+
+		/* Check if file is restorable */
+		err = ovl_check_restorable(dentry, pathname, NULL, NULL);
 
 		kfree(pathname);
 		return err;

@@ -32,6 +32,28 @@ struct ovl_restore_lower_args {
 	__u32 flags;			/* Reserved for future use, must be 0 */
 };
 
+/*
+ * OVL_IOC_IS_RESTORABLE - Check if a file can be restored
+ *
+ * This ioctl checks whether a given path has a whiteout in the upper layer
+ * that can be removed to restore the lower layer file. This allows userspace
+ * to query restorability without actually performing the restoration.
+ *
+ * Uses the same argument structure as OVL_IOC_RESTORE_LOWER.
+ *
+ * Returns:
+ *   0 if the file is restorable (has a whiteout)
+ *   -ENOENT if no whiteout exists at the specified path
+ *   -EINVAL if path is invalid
+ *   -EROFS if overlay is read-only (no upper layer)
+ */
+struct ovl_is_restorable_args {
+	__aligned_u64 path_ptr;		/* Pointer to path string */
+	__u32 path_len;			/* Length of path string */
+	__u32 flags;			/* Reserved for future use, must be 0 */
+};
+
 #define OVL_IOC_RESTORE_LOWER _IOW('O', 1, struct ovl_restore_lower_args)
+#define OVL_IOC_IS_RESTORABLE _IOR('O', 2, struct ovl_is_restorable_args)
 
 #endif /* _UAPI_LINUX_OVERLAYFS_H */

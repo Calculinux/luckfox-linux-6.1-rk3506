@@ -31,9 +31,12 @@
 
 static void usage(const char *progname)
 {
-	fprintf(stderr, "Usage: %s <overlay-mount-point> <path>...\n", progname);
+	fprintf(stderr, "Usage: %s [OPTIONS] <overlay-mount-point> <path>...\n", progname);
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Restore visibility of overlayfs lower layer files.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "Options:\n");
+	fprintf(stderr, "  --test, -t       Test if files are restorable without restoring them\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Arguments:\n");
 	fprintf(stderr, "  overlay-mount-point  Path to the overlay filesystem mount\n");
@@ -41,6 +44,7 @@ static void usage(const char *progname)
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Example:\n");
 	fprintf(stderr, "  %s / /usr/bin/foo /usr/lib/libbar.so\n", progname);
+	fprintf(stderr, "  %s --test / /usr/bin/foo\n", progname);
 	exit(1);
 }
 
@@ -62,17 +66,43 @@ static int restore_lower(int fd, const char *path)
 	return 0;
 }
 
+static int is_restorable(int fd, const char *path)
+{
+	struct ovl_is_restorable_args args;
+	int ret;
+
+	args.path_ptr = (__u64)(unsigned long)path;
+	args.path_len = strlen(path);
+	args.flags = 0;
+
+	ret = ioctl(fd, OVL_IOC_IS_RESTORABLE, &args);
+	if (ret < 0) {
+		/* Don't print error - caller will handle it */
+		return -1;
+	}
+
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	const char *mount_point;
-	int fd, i;
+	int fd, i, start_index;
 	int errors = 0;
+	int test_mode = 0;
 
-	if (argc < 3) {
+	/* Parse options */
+	start_index = 1;
+	if (argc > 1 && (strcmp(argv[1], "--test") == 0 || strcmp(argv[1], "-t") == 0)) {
+		test_mode = 1;
+		start_index = 2;
+	}
+
+	if (argc < start_index + 2) {
 		usage(argv[0]);
 	}
 
-	mount_point = argv[1];
+	mount_point = argv[start_index];
 
 	/* Open the overlay mount point */
 	fd = open(mount_point, O_RDONLY | O_DIRECTORY);
@@ -83,17 +113,28 @@ int main(int argc, char **argv)
 	}
 
 	/* Process each path */
-	for (i = 2; i < argc; i++) {
+	for (i = start_index + 1; i < argc; i++) {
 		const char *path = argv[i];
 
-		printf("Restoring: %s\n", path);
-
-		if (restore_lower(fd, path) < 0) {
-			fprintf(stderr, "Error: Failed to restore '%s': %s\n",
-				path, strerror(errno));
-			errors++;
+		if (test_mode) {
+			/* Test mode - check if restorable */
+			if (is_restorable(fd, path) == 0) {
+				printf("Restorable: %s\n", path);
+			} else {
+				printf("Not restorable: %s (%s)\n", path, strerror(errno));
+				errors++;
+			}
 		} else {
-			printf("Successfully restored: %s\n", path);
+			/* Normal mode - restore the file */
+			printf("Restoring: %s\n", path);
+
+			if (restore_lower(fd, path) < 0) {
+				fprintf(stderr, "Error: Failed to restore '%s': %s\n",
+					path, strerror(errno));
+				errors++;
+			} else {
+				printf("Successfully restored: %s\n", path);
+			}
 		}
 	}
 
@@ -104,6 +145,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	printf("\nAll files restored successfully\n");
+	if (test_mode) {
+		printf("\nAll files are restorable\n");
+	} else {
+		printf("\nAll files restored successfully\n");
+	}
 	return 0;
 }
