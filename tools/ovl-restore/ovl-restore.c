@@ -104,11 +104,11 @@ static int is_restorable(int fd, const char *path)
 
 	ret = ioctl(fd, OVL_IOC_IS_RESTORABLE, &args);
 	if (ret < 0) {
-		/* Don't print error - caller will handle it */
-		return -1;
+		/* Not restorable - caller will handle it */
+		return 0;
 	}
 
-	return 0;
+	return 1;
 }
 
 int main(int argc, char **argv)
@@ -145,7 +145,7 @@ int main(int argc, char **argv)
 
 		if (test_mode) {
 			/* Test mode - check if restorable */
-			if (is_restorable(fd, path) == 0) {
+			if (is_restorable(fd, path)) {
 				printf("Restorable: %s\n", path);
 			} else {
 				printf("Not restorable: %s (%s)\n", path, strerror(errno));
