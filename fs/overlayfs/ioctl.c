@@ -130,7 +130,8 @@ static int ovl_restore_lower_by_path(struct dentry *dentry,
 	err = vfs_unlink(ovl_upper_mnt_userns(ofs), upper_dir, upper_dentry, NULL);
 	revert_creds(old_cred);
 
-	/* Invalidate the dentry immediately after successful unlink to prevent
+	/*
+	 * Invalidate the dentry immediately after successful unlink to prevent
 	 * race conditions where another process could observe an inconsistent
 	 * state (whiteout removed from disk but still cached)
 	 */
