@@ -34,11 +34,7 @@
  * (extracted from linux/overlayfs.h to avoid kernel header dependencies)
  */
 #ifndef __aligned_u64
-#ifdef __x86_64__
 #define __aligned_u64 __attribute__((aligned(8))) uint64_t
-#else
-#define __aligned_u64 uint64_t
-#endif
 #endif
 
 struct ovl_restore_lower_args {
