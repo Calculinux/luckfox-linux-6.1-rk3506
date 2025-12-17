@@ -192,7 +192,7 @@ static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
 	 * strings from userspace (where strnlen < path_len) and strings
 	 * without null terminators (where we add the terminator above).
 	 */
-	if (strnlen(pathname, path_len + 1) == 0) {
+	if (strnlen(pathname, path_len) == 0) {
 		kfree(pathname);
 		return -EINVAL;
 	}
