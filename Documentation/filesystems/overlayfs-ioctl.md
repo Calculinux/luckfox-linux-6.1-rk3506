@@ -112,14 +112,17 @@ done
 import os
 import fcntl
 import struct
+import ctypes
 
 OVL_IOC_RESTORE_LOWER = 0x400C4F01  # _IOW('O', 1, ...)
 
 def restore_lower(mount_point, path):
     with open(mount_point, 'r') as f:
         path_bytes = path.encode('utf-8')
+        # Use ctypes to get a proper pointer to the C string data
+        path_ptr = ctypes.cast(ctypes.c_char_p(path_bytes), ctypes.c_void_p).value
         args = struct.pack('QII', 
-                          id(path_bytes),  # path_ptr
+                          path_ptr,         # path_ptr
                           len(path_bytes),  # path_len
                           0)                # flags
         fcntl.ioctl(f.fileno(), OVL_IOC_RESTORE_LOWER, args)
