@@ -130,6 +130,14 @@ static int ovl_restore_lower_by_path(struct dentry *dentry,
 	err = vfs_unlink(ovl_upper_mnt_userns(ofs), upper_dir, upper_dentry, NULL);
 	revert_creds(old_cred);
 
+	/*
+	 * Invalidate the dentry immediately after successful unlink to prevent
+	 * race conditions where another process could observe an inconsistent
+	 * state (whiteout removed from disk but still cached)
+	 */
+	if (!err)
+		d_drop(overlay_dentry);
+
 out_unlock:
 
 	inode_unlock(upper_dir);
@@ -138,9 +146,6 @@ out_unlock:
 
 	if (err)
 		goto out_path_put;
-
-	/* Invalidate the dentry to force a fresh lookup */
-	d_drop(overlay_dentry);
 
 	pr_debug("restored lower layer file for %s\n", pathname);
 
