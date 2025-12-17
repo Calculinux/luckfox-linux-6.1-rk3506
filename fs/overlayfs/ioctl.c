@@ -17,7 +17,7 @@
 /**
  * ovl_check_restorable - Check if a path has a restorable whiteout
  * @dentry: overlay dentry
- * @pathname: path relative to overlay mount point
+ * @pathname: absolute path to the file in the overlay filesystem
  * @upper_dentry_out: optional pointer to store upper dentry (caller must dput)
  * @path_out: optional pointer to store path (caller must path_put)
  *
@@ -84,7 +84,7 @@ out_path_put:
 /**
  * ovl_restore_lower_by_path - Restore visibility of a lower layer file
  * @dentry: overlay dentry
- * @pathname: path relative to overlay mount point
+ * @pathname: absolute path to the file in the overlay filesystem
  *
  * This function removes a whiteout character device from the upper layer,
  * making the corresponding lower layer file visible again. It also
@@ -150,6 +150,63 @@ out_path_put:
 }
 
 /**
+ * ovl_ioctl_validate_and_copy_path - Validate and copy path from userspace
+ * @path_ptr: userspace pointer to path string
+ * @path_len: length of path string
+ * @flags: flags field (must be 0)
+ * @pathname_out: pointer to store allocated pathname (caller must kfree)
+ *
+ * Validates ioctl arguments and copies the path string from userspace.
+ * Ensures the path is null-terminated and within valid length bounds.
+ *
+ * Returns 0 on success, negative error code on failure.
+ */
+static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
+					     __u32 flags, char **pathname_out)
+{
+	char *pathname;
+	size_t actual_len;
+
+	/* Validate flags (must be 0 for now) */
+	if (flags != 0)
+		return -EINVAL;
+
+	/* Validate path length */
+	if (path_len == 0 || path_len >= PATH_MAX)
+		return -EINVAL;
+
+	/* Allocate and copy path string */
+	pathname = kmalloc(path_len + 1, GFP_KERNEL);
+	if (!pathname)
+		return -ENOMEM;
+
+	if (copy_from_user(pathname, (char __user *)(uintptr_t)path_ptr,
+			   path_len)) {
+		kfree(pathname);
+		return -EFAULT;
+	}
+
+	/* Ensure the string is null-terminated and validate it */
+	pathname[path_len] = '\0';
+
+	/* Verify the path actually contains a null byte within path_len.
+	 * If userspace provided a string without null terminator, strnlen
+	 * will return path_len, indicating we had to add it ourselves.
+	 * This is acceptable - we document that path_len should not include
+	 * the null terminator, and we add it here.
+	 */
+	actual_len = strnlen(pathname, path_len);
+	if (actual_len > path_len) {
+		/* This should never happen since we just null-terminated it */
+		kfree(pathname);
+		return -EINVAL;
+	}
+
+	*pathname_out = pathname;
+	return 0;
+}
+
+/**
  * ovl_ioctl - Handle overlay filesystem ioctl commands
  * @file: file pointer
  * @cmd: ioctl command
@@ -174,25 +231,13 @@ long ovl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (copy_from_user(&restore_args, argp, sizeof(restore_args)))
 			return -EFAULT;
 
-		/* Validate flags (must be 0 for now) */
-		if (restore_args.flags != 0)
-			return -EINVAL;
-
-		/* Validate path length */
-		if (restore_args.path_len == 0 || restore_args.path_len >= PATH_MAX)
-			return -EINVAL;
-
-		/* Allocate and copy path string */
-		pathname = kmalloc(restore_args.path_len + 1, GFP_KERNEL);
-		if (!pathname)
-			return -ENOMEM;
-
-		if (copy_from_user(pathname, (char __user *)(uintptr_t)restore_args.path_ptr,
-				   restore_args.path_len)) {
-			kfree(pathname);
-			return -EFAULT;
-		}
-		pathname[restore_args.path_len] = '\0';
+		/* Validate and copy path */
+		err = ovl_ioctl_validate_and_copy_path(restore_args.path_ptr,
+						       restore_args.path_len,
+						       restore_args.flags,
+						       &pathname);
+		if (err)
+			return err;
 
 		/* Perform the operation */
 		err = ovl_restore_lower_by_path(dentry, pathname);
@@ -205,25 +250,13 @@ long ovl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (copy_from_user(&restorable_args, argp, sizeof(restorable_args)))
 			return -EFAULT;
 
-		/* Validate flags (must be 0 for now) */
-		if (restorable_args.flags != 0)
-			return -EINVAL;
-
-		/* Validate path length */
-		if (restorable_args.path_len == 0 || restorable_args.path_len >= PATH_MAX)
-			return -EINVAL;
-
-		/* Allocate and copy path string */
-		pathname = kmalloc(restorable_args.path_len + 1, GFP_KERNEL);
-		if (!pathname)
-			return -ENOMEM;
-
-		if (copy_from_user(pathname, (char __user *)(uintptr_t)restorable_args.path_ptr,
-				   restorable_args.path_len)) {
-			kfree(pathname);
-			return -EFAULT;
-		}
-		pathname[restorable_args.path_len] = '\0';
+		/* Validate and copy path */
+		err = ovl_ioctl_validate_and_copy_path(restorable_args.path_ptr,
+						       restorable_args.path_len,
+						       restorable_args.flags,
+						       &pathname);
+		if (err)
+			return err;
 
 		/* Check if file is restorable */
 		err = ovl_check_restorable(dentry, pathname, NULL, NULL);

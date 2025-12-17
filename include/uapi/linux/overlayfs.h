@@ -17,7 +17,7 @@
  * when a lower-layer file has been unintentionally hidden by whiteout
  * creation (e.g., after removing a duplicate package in a layered system).
  *
- * The path should be relative to the overlay mount point.
+ * The path should be an absolute path within the overlay filesystem.
  *
  * Returns:
  *   0 on success
