@@ -50,7 +50,7 @@ struct ovl_is_restorable_args {
 };
 
 #define OVL_IOC_RESTORE_LOWER _IOW('O', 1, struct ovl_restore_lower_args)
-#define OVL_IOC_IS_RESTORABLE _IOR('O', 2, struct ovl_is_restorable_args)
+#define OVL_IOC_IS_RESTORABLE _IOW('O', 2, struct ovl_is_restorable_args)
 
 static void usage(const char *progname)
 {
@@ -76,7 +76,7 @@ static int restore_lower(int fd, const char *path)
 	struct ovl_restore_lower_args args;
 	int ret;
 
-	args.path_ptr = (uint64_t)(unsigned long)path;
+	args.path_ptr = (uint64_t)(uintptr_t)path;
 	args.path_len = strlen(path);  /* String length, not including null terminator */
 	args.flags = 0;
 
@@ -94,7 +94,7 @@ static int is_restorable(int fd, const char *path)
 	struct ovl_is_restorable_args args;
 	int ret;
 
-	args.path_ptr = (uint64_t)(unsigned long)path;
+	args.path_ptr = (uint64_t)(uintptr_t)path;
 	args.path_len = strlen(path);  /* String length, not including null terminator */
 	args.flags = 0;
 

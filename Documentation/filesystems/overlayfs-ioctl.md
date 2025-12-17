@@ -11,7 +11,7 @@ In dual-layer package management systems (like Calculinux), a common scenario ar
 1. User installs a package into the overlay layer (e.g., SDL library)
 2. A system update includes a newer version of that package in the base image
 3. During reconciliation, the old overlay package is removed with `opkg remove`
-4. OverlayFS creates whiteout files (char device 0:0) for each removed file
+4. OverlayFS creates whiteout files (character device whiteout markers) for each removed file
 5. These whiteouts persist, blocking access to the newer base image version
 
 Previously, the only solution was to:
@@ -111,28 +111,34 @@ done
 ```python
 import os
 import fcntl
-import struct
 import ctypes
 
 OVL_IOC_RESTORE_LOWER = 0x40104F01  # _IOW('O', 1, struct ovl_restore_lower_args)
+
+class OvlRestoreLowerArgs(ctypes.Structure):
+    _fields_ = [
+        ("path_ptr", ctypes.c_uint64),
+        ("path_len", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+    ]
 
 def restore_lower(mount_point, path):
     with open(mount_point, 'r') as f:
         # Encode string to bytes (does not include null terminator)
         path_bytes = path.encode('utf-8')
         
-        # Add null terminator so kernel can copy it
-        path_cstr = path_bytes + b'\0'
+        # Allocate a NUL-terminated C string buffer that stays alive during ioctl
+        path_buf = ctypes.create_string_buffer(path_bytes + b'\0')
         
-        # Use ctypes to get a proper pointer to the C string data
-        path_ptr = ctypes.cast(ctypes.c_char_p(path_cstr), ctypes.c_void_p).value
+        # Prepare the ioctl argument structure
+        args = OvlRestoreLowerArgs()
+        args.path_ptr = ctypes.addressof(path_buf)
+        args.path_len = len(path_bytes)  # strlen, not including null
+        args.flags = 0
         
-        # path_len is strlen (excluding null), kernel copies path_len + 1 bytes
-        args = struct.pack('QII', 
-                          path_ptr,         # path_ptr
-                          len(path_bytes),  # path_len (strlen, not including null)
-                          0)                # flags
-        fcntl.ioctl(f.fileno(), OVL_IOC_RESTORE_LOWER, args)
+        # Convert the structure to a bytes buffer for ioctl
+        arg_buf = ctypes.string_at(ctypes.byref(args), ctypes.sizeof(args))
+        fcntl.ioctl(f.fileno(), OVL_IOC_RESTORE_LOWER, arg_buf)
 ```
 
 ## Error Codes
