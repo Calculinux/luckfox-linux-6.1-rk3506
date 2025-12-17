@@ -179,7 +179,7 @@ long ovl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			return -EINVAL;
 
 		/* Validate path length */
-		if (restore_args.path_len == 0 || restore_args.path_len > PATH_MAX)
+		if (restore_args.path_len == 0 || restore_args.path_len >= PATH_MAX)
 			return -EINVAL;
 
 		/* Allocate and copy path string */
@@ -210,7 +210,7 @@ long ovl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			return -EINVAL;
 
 		/* Validate path length */
-		if (restorable_args.path_len == 0 || restorable_args.path_len > PATH_MAX)
+		if (restorable_args.path_len == 0 || restorable_args.path_len >= PATH_MAX)
 			return -EINVAL;
 
 		/* Allocate and copy path string */
