@@ -118,7 +118,8 @@ OVL_IOC_RESTORE_LOWER = 0x40104F01  # _IOW('O', 1, struct ovl_restore_lower_args
 
 def restore_lower(mount_point, path):
     with open(mount_point, 'r') as f:
-        # Path must be null-terminated
+        # Explicitly add null terminator to match the API requirement.
+        # path_len must include the null terminator.
         path_bytes = path.encode('utf-8') + b'\0'
         # Use ctypes to get a proper pointer to the C string data
         path_ptr = ctypes.cast(ctypes.c_char_p(path_bytes), ctypes.c_void_p).value

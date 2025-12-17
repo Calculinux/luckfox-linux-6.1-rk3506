@@ -196,11 +196,15 @@ static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
 		return -EINVAL;
 	}
 
-	/* Verify the string is not empty and has no embedded nulls */
-	if (strnlen(pathname, path_len) == 0 ||
-	    strnlen(pathname, path_len) != path_len - 1) {
-		kfree(pathname);
-		return -EINVAL;
+	/* Verify the string is not empty and has no embedded nulls.
+	 * The actual string length should be exactly path_len - 1.
+	 */
+	{
+		size_t actual_len = strnlen(pathname, path_len);
+		if (actual_len == 0 || actual_len != path_len - 1) {
+			kfree(pathname);
+			return -EINVAL;
+		}
 	}
 
 	*pathname_out = pathname;
