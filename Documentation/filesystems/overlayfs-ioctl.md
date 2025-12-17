@@ -83,7 +83,7 @@ ovl-restore / /usr/bin/foo /usr/lib/libbar.so
 int fd = open("/", O_RDONLY | O_DIRECTORY);
 struct ovl_restore_lower_args args = {
     .path_ptr = (uint64_t)"/usr/bin/foo",
-    .path_len = strlen("/usr/bin/foo"),
+    .path_len = strlen("/usr/bin/foo") + 1,  /* Include null terminator */
     .flags = 0
 };
 
@@ -118,12 +118,13 @@ OVL_IOC_RESTORE_LOWER = 0x40104F01  # _IOW('O', 1, struct ovl_restore_lower_args
 
 def restore_lower(mount_point, path):
     with open(mount_point, 'r') as f:
-        path_bytes = path.encode('utf-8')
+        # Path must be null-terminated
+        path_bytes = path.encode('utf-8') + b'\0'
         # Use ctypes to get a proper pointer to the C string data
         path_ptr = ctypes.cast(ctypes.c_char_p(path_bytes), ctypes.c_void_p).value
         args = struct.pack('QII', 
                           path_ptr,         # path_ptr
-                          len(path_bytes),  # path_len
+                          len(path_bytes),  # path_len (includes null terminator)
                           0)                # flags
         fcntl.ioctl(f.fileno(), OVL_IOC_RESTORE_LOWER, args)
 ```

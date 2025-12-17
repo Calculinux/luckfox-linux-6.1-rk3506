@@ -18,12 +18,13 @@
 /**
  * ovl_check_restorable - Check if a path has a restorable whiteout
  * @dentry: overlay dentry
- * @pathname: absolute path to the file in the overlay filesystem
+ * @pathname: absolute path from the system root (e.g., "/usr/bin/foo")
  * @upper_dentry_out: optional pointer to store upper dentry (caller must dput)
  * @path_out: optional pointer to store path (caller must path_put)
  *
  * Checks if the given path has a whiteout in the upper layer that can be
- * removed to restore the lower layer file.
+ * removed to restore the lower layer file. The path must be an absolute path
+ * starting with '/' and pointing to a file within the overlay filesystem.
  *
  * Returns 0 if restorable, negative error code otherwise.
  */
@@ -85,12 +86,15 @@ out_path_put:
 /**
  * ovl_restore_lower_by_path - Restore visibility of a lower layer file
  * @dentry: overlay dentry
- * @pathname: absolute path to the file in the overlay filesystem
+ * @pathname: absolute path from the system root (e.g., "/usr/bin/foo")
  *
  * This function removes a whiteout character device from the upper layer,
  * making the corresponding lower layer file visible again. It also
  * invalidates the dentry cache entry to ensure the change is immediately
  * visible.
+ *
+ * The path must be an absolute path starting with '/' and pointing to a 
+ * file within the overlay filesystem that has a whiteout in the upper layer.
  *
  * Returns 0 on success, negative error code on failure.
  */
@@ -153,12 +157,12 @@ out_path_put:
 /**
  * ovl_ioctl_validate_and_copy_path - Validate and copy path from userspace
  * @path_ptr: userspace pointer to path string
- * @path_len: length of path string
+ * @path_len: length of path string (must include null terminator)
  * @flags: flags field (must be 0)
  * @pathname_out: pointer to store allocated pathname (caller must kfree)
  *
  * Validates ioctl arguments and copies the path string from userspace.
- * Ensures the path is null-terminated and within valid length bounds.
+ * The path must be properly null-terminated within path_len bytes.
  *
  * Returns 0 on success, negative error code on failure.
  */
@@ -171,12 +175,12 @@ static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
 	if (flags != 0)
 		return -EINVAL;
 
-	/* Validate path length - must leave room for null terminator */
-	if (path_len == 0 || path_len >= PATH_MAX)
+	/* Validate path length - must include null terminator */
+	if (path_len == 0 || path_len > PATH_MAX)
 		return -EINVAL;
 
-	/* Allocate and copy path string */
-	pathname = kmalloc(path_len + 1, GFP_KERNEL);
+	/* Allocate buffer for the path string */
+	pathname = kmalloc(path_len, GFP_KERNEL);
 	if (!pathname)
 		return -ENOMEM;
 
@@ -186,14 +190,15 @@ static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
 		return -EFAULT;
 	}
 
-	/* Ensure the string is null-terminated */
-	pathname[path_len] = '\0';
+	/* Verify the string is properly null-terminated */
+	if (pathname[path_len - 1] != '\0') {
+		kfree(pathname);
+		return -EINVAL;
+	}
 
-	/* Validate the string is not empty. We accept both null-terminated
-	 * strings from userspace (where strnlen < path_len) and strings
-	 * without null terminators (where we add the terminator above).
-	 */
-	if (strnlen(pathname, path_len) == 0) {
+	/* Verify the string is not empty and has no embedded nulls */
+	if (strnlen(pathname, path_len) == 0 ||
+	    strnlen(pathname, path_len) != path_len - 1) {
 		kfree(pathname);
 		return -EINVAL;
 	}

@@ -81,7 +81,7 @@ static int restore_lower(int fd, const char *path)
 	int ret;
 
 	args.path_ptr = (uint64_t)(unsigned long)path;
-	args.path_len = strlen(path);
+	args.path_len = strlen(path) + 1;  /* Include null terminator */
 	args.flags = 0;
 
 	ret = ioctl(fd, OVL_IOC_RESTORE_LOWER, &args);
@@ -99,7 +99,7 @@ static int is_restorable(int fd, const char *path)
 	int ret;
 
 	args.path_ptr = (uint64_t)(unsigned long)path;
-	args.path_len = strlen(path);
+	args.path_len = strlen(path) + 1;  /* Include null terminator */
 	args.flags = 0;
 
 	ret = ioctl(fd, OVL_IOC_IS_RESTORABLE, &args);

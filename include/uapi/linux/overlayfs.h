@@ -17,18 +17,20 @@
  * when a lower-layer file has been unintentionally hidden by whiteout
  * creation (e.g., after removing a duplicate package in a layered system).
  *
- * The path should be an absolute path within the overlay filesystem.
+ * The path must be an absolute path from the system root (e.g., "/usr/bin/foo")
+ * pointing to a file within the overlay filesystem. The path_ptr must point to
+ * a null-terminated string, and path_len must include the null terminator.
  *
  * Returns:
  *   0 on success
  *   -ENOENT if no whiteout exists at the specified path
- *   -EINVAL if path is invalid or doesn't point to a whiteout
+ *   -EINVAL if path is invalid, not null-terminated, or doesn't point to a whiteout
  *   -EPERM if caller lacks permissions
  *   -EROFS if overlay is read-only
  */
 struct ovl_restore_lower_args {
-	__aligned_u64 path_ptr;		/* Pointer to path string */
-	__u32 path_len;			/* Length of path string */
+	__aligned_u64 path_ptr;		/* Pointer to null-terminated path string */
+	__u32 path_len;			/* Length of path including null terminator */
 	__u32 flags;			/* Reserved for future use, must be 0 */
 };
 
@@ -39,17 +41,19 @@ struct ovl_restore_lower_args {
  * that can be removed to restore the lower layer file. This allows userspace
  * to query restorability without actually performing the restoration.
  *
- * Uses the same argument structure as OVL_IOC_RESTORE_LOWER.
+ * The path must be an absolute path from the system root (e.g., "/usr/bin/foo").
+ * The path_ptr must point to a null-terminated string, and path_len must 
+ * include the null terminator.
  *
  * Returns:
  *   0 if the file is restorable (has a whiteout)
  *   -ENOENT if no whiteout exists at the specified path
- *   -EINVAL if path is invalid
+ *   -EINVAL if path is invalid or not null-terminated
  *   -EROFS if overlay is read-only (no upper layer)
  */
 struct ovl_is_restorable_args {
-	__aligned_u64 path_ptr;		/* Pointer to path string */
-	__u32 path_len;			/* Length of path string */
+	__aligned_u64 path_ptr;		/* Pointer to null-terminated path string */
+	__u32 path_len;			/* Length of path including null terminator */
 	__u32 flags;			/* Reserved for future use, must be 0 */
 };
 
