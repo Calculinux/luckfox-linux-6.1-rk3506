@@ -165,7 +165,6 @@ static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
 					     __u32 flags, char **pathname_out)
 {
 	char *pathname;
-	size_t actual_len;
 
 	/* Validate flags (must be 0 for now) */
 	if (flags != 0)
@@ -186,18 +185,14 @@ static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
 		return -EFAULT;
 	}
 
-	/* Ensure the string is null-terminated and validate it */
+	/* Ensure the string is null-terminated */
 	pathname[path_len] = '\0';
 
-	/* Verify the path actually contains a null byte within path_len.
-	 * If userspace provided a string without null terminator, strnlen
-	 * will return path_len, indicating we had to add it ourselves.
-	 * This is acceptable - we document that path_len should not include
-	 * the null terminator, and we add it here.
+	/* Validate the string is not empty. We accept both null-terminated
+	 * strings from userspace (where strnlen < path_len) and strings
+	 * without null terminators (where we add the terminator above).
 	 */
-	actual_len = strnlen(pathname, path_len);
-	if (actual_len > path_len) {
-		/* This should never happen since we just null-terminated it */
+	if (strnlen(pathname, path_len + 1) == 0) {
 		kfree(pathname);
 		return -EINVAL;
 	}
