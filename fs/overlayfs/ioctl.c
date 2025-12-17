@@ -108,10 +108,15 @@ static int ovl_restore_lower_by_path(struct dentry *dentry,
 	const struct cred *old_cred;
 	int err;
 
+	/* Acquire write access to the filesystem */
+	err = ovl_want_write(dentry);
+	if (err)
+		return err;
+
 	/* Check if file is restorable and get the path/upper_dentry */
 	err = ovl_check_restorable(dentry, pathname, &upper_dentry, &path);
 	if (err)
-		return err;
+		goto out_drop_write;
 
 	overlay_dentry = path.dentry;
 
@@ -129,6 +134,15 @@ static int ovl_restore_lower_by_path(struct dentry *dentry,
 			       MAY_WRITE | MAY_EXEC);
 	if (err)
 		goto out_unlock;
+
+	/* Re-verify that upper_dentry is still a whiteout after acquiring the lock
+	 * to prevent race conditions where the whiteout could have been removed or
+	 * replaced between the initial check and lock acquisition
+	 */
+	if (!ovl_is_whiteout(upper_dentry)) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
 
 	/* Remove the whiteout with proper credentials */
 	old_cred = ovl_override_creds(dentry->d_sb);
@@ -156,6 +170,9 @@ out_unlock:
 
 out_path_put:
 	path_put(&path);
+
+out_drop_write:
+	ovl_drop_write(dentry);
 	return err;
 }
 

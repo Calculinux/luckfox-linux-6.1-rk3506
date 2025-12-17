@@ -60,6 +60,6 @@ struct ovl_is_restorable_args {
 };
 
 #define OVL_IOC_RESTORE_LOWER _IOW('O', 1, struct ovl_restore_lower_args)
-#define OVL_IOC_IS_RESTORABLE _IOR('O', 2, struct ovl_is_restorable_args)
+#define OVL_IOC_IS_RESTORABLE _IOW('O', 2, struct ovl_is_restorable_args)
 
 #endif /* _UAPI_LINUX_OVERLAYFS_H */
