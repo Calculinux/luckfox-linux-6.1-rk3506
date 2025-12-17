@@ -99,12 +99,9 @@ static int is_restorable(int fd, const char *path)
 	args.flags = 0;
 
 	ret = ioctl(fd, OVL_IOC_IS_RESTORABLE, &args);
-	if (ret < 0) {
-		/* Don't print error - caller will handle it */
-		return -1;
-	}
-
-	return 0;
+	/* Return 1 if restorable (ioctl succeeded), 0 if not (ioctl failed) */
+	/* When returning 0, errno is set by the failed ioctl */
+	return (ret >= 0) ? 1 : 0;
 }
 
 int main(int argc, char **argv)
@@ -141,7 +138,7 @@ int main(int argc, char **argv)
 
 		if (test_mode) {
 			/* Test mode - check if restorable */
-			if (is_restorable(fd, path) == 0) {
+			if (is_restorable(fd, path)) {
 				printf("Restorable: %s\n", path);
 			} else {
 				printf("Not restorable: %s (%s)\n", path, strerror(errno));
