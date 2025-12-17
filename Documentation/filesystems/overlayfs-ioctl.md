@@ -118,11 +118,13 @@ OVL_IOC_RESTORE_LOWER = 0x40104F01  # _IOW('O', 1, struct ovl_restore_lower_args
 
 def restore_lower(mount_point, path):
     with open(mount_point, 'r') as f:
-        # String literals in Python are implicitly null-terminated when
-        # converted to bytes and passed through ctypes
+        # Encode string and add null terminator.
+        # The kernel will copy len(path_bytes) + 1 bytes to get the null terminator.
         path_bytes = path.encode('utf-8')
+        path_cstr = path_bytes + b'\0'  # Null-terminated C string
+        
         # Use ctypes to get a proper pointer to the C string data
-        path_ptr = ctypes.cast(ctypes.c_char_p(path_bytes), ctypes.c_void_p).value
+        path_ptr = ctypes.cast(ctypes.c_char_p(path_cstr), ctypes.c_void_p).value
         args = struct.pack('QII', 
                           path_ptr,         # path_ptr
                           len(path_bytes),  # path_len (strlen, not including null)
