@@ -170,8 +170,7 @@ Potential additions for future versions:
 
 1. **Batch operation** - Restore multiple files in one ioctl call
 2. **Recursive restoration** - Restore all files under a directory
-3. **Query operation** - Check if a path has a whiteout without removing
-4. **Statistics** - Return number of files restored
+3. **Statistics** - Return number of files restored
 
 ## Integration with Calculinux-Update
 
