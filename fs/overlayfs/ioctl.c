@@ -146,7 +146,7 @@ static int ovl_restore_lower_by_path(struct dentry *dentry,
 
 	/* Remove the whiteout with proper credentials */
 	old_cred = ovl_override_creds(dentry->d_sb);
-	err = vfs_unlink(ovl_upper_mnt_userns(ofs), upper_dir, upper_dentry, NULL);
+	err = ovl_do_unlink(ofs, upper_dir, upper_dentry);
 	revert_creds(old_cred);
 
 	/*
