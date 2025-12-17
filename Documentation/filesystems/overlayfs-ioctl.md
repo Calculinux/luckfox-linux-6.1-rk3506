@@ -113,7 +113,7 @@ import os
 import fcntl
 import struct
 
-OVL_IOC_RESTORE_LOWER = 0x400C4F01  # _IOW('O', 1, ...)
+OVL_IOC_RESTORE_LOWER = 0x40104F01  # _IOW('O', 1, struct ovl_restore_lower_args)
 
 def restore_lower(mount_point, path):
     with open(mount_point, 'r') as f:
