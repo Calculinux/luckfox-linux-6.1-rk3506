@@ -156,13 +156,15 @@ out_path_put:
 
 /**
  * ovl_ioctl_validate_and_copy_path - Validate and copy path from userspace
- * @path_ptr: userspace pointer to path string
- * @path_len: length of path string (must include null terminator)
+ * @path_ptr: userspace pointer to null-terminated path string
+ * @path_len: length of path string (excluding null terminator, as from strlen)
  * @flags: flags field (must be 0)
  * @pathname_out: pointer to store allocated pathname (caller must kfree)
  *
- * Validates ioctl arguments and copies the path string from userspace.
- * The path must be properly null-terminated within path_len bytes.
+ * Validates ioctl arguments and copies a null-terminated path string from
+ * userspace. The path_len should be the result of strlen() - i.e., it should
+ * NOT include the null terminator. The kernel will allocate path_len + 1 bytes
+ * and copy the string including its null terminator from userspace.
  *
  * Returns 0 on success, negative error code on failure.
  */
@@ -175,36 +177,32 @@ static int ovl_ioctl_validate_and_copy_path(__u64 path_ptr, __u32 path_len,
 	if (flags != 0)
 		return -EINVAL;
 
-	/* Validate path length - must include null terminator */
-	if (path_len == 0 || path_len > PATH_MAX)
+	/* Validate path length (strlen, not including null terminator) */
+	if (path_len == 0 || path_len >= PATH_MAX)
 		return -EINVAL;
 
-	/* Allocate buffer for the path string */
-	pathname = kmalloc(path_len, GFP_KERNEL);
+	/* Allocate buffer for the path string plus null terminator */
+	pathname = kmalloc(path_len + 1, GFP_KERNEL);
 	if (!pathname)
 		return -ENOMEM;
 
+	/* Copy the string including null terminator from userspace */
 	if (copy_from_user(pathname, (char __user *)(uintptr_t)path_ptr,
-			   path_len)) {
+			   path_len + 1)) {
 		kfree(pathname);
 		return -EFAULT;
 	}
 
-	/* Verify the string is properly null-terminated */
-	if (pathname[path_len - 1] != '\0') {
+	/* Verify the string is properly null-terminated at the expected position */
+	if (pathname[path_len] != '\0') {
 		kfree(pathname);
 		return -EINVAL;
 	}
 
-	/* Verify the string is not empty and has no embedded nulls.
-	 * The actual string length should be exactly path_len - 1.
-	 */
-	{
-		size_t actual_len = strnlen(pathname, path_len);
-		if (actual_len == 0 || actual_len != path_len - 1) {
-			kfree(pathname);
-			return -EINVAL;
-		}
+	/* Verify no embedded nulls - actual length should equal path_len */
+	if (strnlen(pathname, path_len) != path_len) {
+		kfree(pathname);
+		return -EINVAL;
 	}
 
 	*pathname_out = pathname;
