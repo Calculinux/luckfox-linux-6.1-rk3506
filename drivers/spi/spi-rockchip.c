@@ -208,6 +208,7 @@ struct rockchip_spi {
 	u32 version;
 	/*depth of the FIFO buffer */
 	u32 fifo_len;
+	u32 tx_burst;	/* words per TX DMA burst */
 	/* frequency of spiclk */
 	u32 freq;
 	/* speed of io rate */
@@ -531,7 +532,7 @@ static int rockchip_spi_prepare_dma(struct rockchip_spi *rs,
 			.direction = DMA_MEM_TO_DEV,
 			.dst_addr = rs->dma_addr_tx,
 			.dst_addr_width = rs->n_bytes,
-			.dst_maxburst = rs->fifo_len / 4,
+			.dst_maxburst = rs->tx_burst,
 		};
 
 		dmaengine_slave_config(ctlr->dma_tx, &txconf);
@@ -1112,6 +1113,12 @@ static int rockchip_spi_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto err_disable_sclk_in;
 	}
+	/* TX DMA requests come when half the FIFO is free: a burst of up to
+	 * that many words fits. The default, a quarter of the FIFO, unless
+	 * the device tree asks for less. */
+	rs->tx_burst = rs->fifo_len / 4;
+	if (!of_property_read_u32(pdev->dev.of_node, "rockchip,tx-dma-burst", &rs->tx_burst))
+		rs->tx_burst = clamp(rs->tx_burst, 1U, rs->fifo_len / 2);
 	quirks_cfg = device_get_match_data(&pdev->dev);
 	if (quirks_cfg)
 		rs->max_baud_div_in_cpha = quirks_cfg->max_baud_div_in_cpha;
