@@ -72,6 +72,24 @@ properties:
       (may need to be fine tuned for high capacitance lines).
       If not specified 0 will be used.
 
+  rockchip,tx-dma-burst:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 1
+    description:
+      Words per TX DMA burst. A burst holds the low-speed peripheral bus
+      for its whole length, so a shorter one lets other bus masters in
+      sooner. Limited to half the FIFO depth. If not specified a quarter
+      of the FIFO depth is used.
+
+  rockchip,rx-dma-burst:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [1, 2, 4, 8, 16]
+    description:
+      Most words per RX DMA burst, and with it the RX FIFO level at which
+      DMA is requested. As for TX, a shorter burst lets other bus masters
+      in sooner. If not specified up to 16 words are used, depending on
+      the length of the transfer.
+
   csm:
     default: 0
     description:
