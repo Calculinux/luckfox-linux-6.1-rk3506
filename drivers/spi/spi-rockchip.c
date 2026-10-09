@@ -209,6 +209,8 @@ struct rockchip_spi {
 	/*depth of the FIFO buffer */
 	u32 fifo_len;
 	u32 tx_burst;	/* words per TX DMA burst */
+	u32 rx_burst;	/* most words per RX DMA burst */
+	u32 xfer_rx_burst;	/* RX burst of the current transfer */
 	/* frequency of spiclk */
 	u32 freq;
 	/* speed of io rate */
@@ -497,6 +499,14 @@ static u32 rockchip_spi_calc_burst_size(u32 data_len)
 	return i;
 }
 
+/* The RX burst divides the transfer's length, so that the last words leave
+ * the FIFO too; no longer than the device tree allows.
+ */
+static u32 rockchip_spi_rx_burst(struct rockchip_spi *rs, u32 data_len)
+{
+	return min(rockchip_spi_calc_burst_size(data_len), READ_ONCE(rs->rx_burst));
+}
+
 static int rockchip_spi_prepare_dma(struct rockchip_spi *rs,
 		struct spi_controller *ctlr, struct spi_transfer *xfer)
 {
@@ -510,7 +520,7 @@ static int rockchip_spi_prepare_dma(struct rockchip_spi *rs,
 			.direction = DMA_DEV_TO_MEM,
 			.src_addr = rs->dma_addr_rx,
 			.src_addr_width = rs->n_bytes,
-			.src_maxburst = rockchip_spi_calc_burst_size(xfer->len / rs->n_bytes),
+			.src_maxburst = rs->xfer_rx_burst,
 		};
 
 		dmaengine_slave_config(ctlr->dma_rx, &rxconf);
@@ -532,7 +542,7 @@ static int rockchip_spi_prepare_dma(struct rockchip_spi *rs,
 			.direction = DMA_MEM_TO_DEV,
 			.dst_addr = rs->dma_addr_tx,
 			.dst_addr_width = rs->n_bytes,
-			.dst_maxburst = rs->tx_burst,
+			.dst_maxburst = READ_ONCE(rs->tx_burst),
 		};
 
 		dmaengine_slave_config(ctlr->dma_tx, &txconf);
@@ -720,8 +730,8 @@ static int rockchip_spi_config(struct rockchip_spi *rs,
 		writel_relaxed(rs->fifo_len / 2 - 1, rs->regs + ROCKCHIP_SPI_RXFTLR);
 
 	writel_relaxed(rs->fifo_len / 2 - 1, rs->regs + ROCKCHIP_SPI_DMATDLR);
-	writel_relaxed(rockchip_spi_calc_burst_size(xfer->len / rs->n_bytes) - 1,
-		       rs->regs + ROCKCHIP_SPI_DMARDLR);
+	rs->xfer_rx_burst = rockchip_spi_rx_burst(rs, xfer->len / rs->n_bytes);
+	writel_relaxed(rs->xfer_rx_burst - 1, rs->regs + ROCKCHIP_SPI_DMARDLR);
 	writel_relaxed(dmacr, rs->regs + ROCKCHIP_SPI_DMACR);
 
 	if (rs->max_baud_div_in_cpha && xfer->speed_hz != rs->speed_hz) {
@@ -978,6 +988,56 @@ static const struct file_operations rockchip_spi_misc_fops = {
 	.mmap		= rockchip_spi_mmap,
 };
 
+/* DMA burst lengths, in words: readable and settable while running, for
+ * tuning. A new value is used from the next transfer.
+ */
+static ssize_t tx_dma_burst_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct rockchip_spi *rs = spi_controller_get_devdata(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(rs->tx_burst));
+}
+
+static ssize_t tx_dma_burst_store(struct device *dev, struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct rockchip_spi *rs = spi_controller_get_devdata(dev_get_drvdata(dev));
+	u32 val;
+
+	if (kstrtou32(buf, 0, &val))
+		return -EINVAL;
+	WRITE_ONCE(rs->tx_burst, clamp(val, 1U, rs->fifo_len / 2));
+	return count;
+}
+static DEVICE_ATTR_RW(tx_dma_burst);
+
+static ssize_t rx_dma_burst_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct rockchip_spi *rs = spi_controller_get_devdata(dev_get_drvdata(dev));
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(rs->rx_burst));
+}
+
+static ssize_t rx_dma_burst_store(struct device *dev, struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct rockchip_spi *rs = spi_controller_get_devdata(dev_get_drvdata(dev));
+	u32 val;
+
+	if (kstrtou32(buf, 0, &val))
+		return -EINVAL;
+	WRITE_ONCE(rs->rx_burst, rounddown_pow_of_two(clamp(val, 1U, 16U)));
+	return count;
+}
+static DEVICE_ATTR_RW(rx_dma_burst);
+
+static struct attribute *rockchip_spi_attrs[] = {
+	&dev_attr_tx_dma_burst.attr,
+	&dev_attr_rx_dma_burst.attr,
+	NULL
+};
+ATTRIBUTE_GROUPS(rockchip_spi);
+
 static int rockchip_spi_probe(struct platform_device *pdev)
 {
 	int ret;
@@ -1119,6 +1179,10 @@ static int rockchip_spi_probe(struct platform_device *pdev)
 	rs->tx_burst = rs->fifo_len / 4;
 	if (!of_property_read_u32(pdev->dev.of_node, "rockchip,tx-dma-burst", &rs->tx_burst))
 		rs->tx_burst = clamp(rs->tx_burst, 1U, rs->fifo_len / 2);
+	/* RX bursts are a power of two, 16 words at most. */
+	rs->rx_burst = 16;
+	if (!of_property_read_u32(pdev->dev.of_node, "rockchip,rx-dma-burst", &rs->rx_burst))
+		rs->rx_burst = rounddown_pow_of_two(clamp(rs->rx_burst, 1U, 16U));
 	quirks_cfg = device_get_match_data(&pdev->dev);
 	if (quirks_cfg)
 		rs->max_baud_div_in_cpha = quirks_cfg->max_baud_div_in_cpha;
@@ -1412,6 +1476,7 @@ static struct platform_driver rockchip_spi_driver = {
 		.name	= DRIVER_NAME,
 		.pm = &rockchip_spi_pm,
 		.of_match_table = of_match_ptr(rockchip_spi_dt_match),
+		.dev_groups = rockchip_spi_groups,
 	},
 	.probe = rockchip_spi_probe,
 	.remove = rockchip_spi_remove,
