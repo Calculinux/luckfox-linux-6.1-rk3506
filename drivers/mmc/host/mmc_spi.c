@@ -97,9 +97,11 @@
 
 /* "scratch" is per-{command,block} data exchanged with the card */
 struct scratch {
+	/* crc_val and status[0] are adjacent: a multiblock read collects the
+	 * CRC and the N(AC) byte after it in one transfer */
+	__be16			crc_val;
 	u8			status[29];
 	u8			data_token;
-	__be16			crc_val;
 };
 
 struct mmc_spi_host {
@@ -553,6 +555,15 @@ mmc_spi_setup_data_message(
 	} else {
 		t->tx_buf = host->ones;
 		t->rx_buf = &scratch->crc_val;
+		if (multiple) {
+			/* The one byte that follows the CRC (below) is read
+			 * with it: one transfer less per block, and each
+			 * transfer costs the controller's registers a
+			 * round of writes.
+			 */
+			t->len = 3;
+			t->cs_change = 1;
+		}
 	}
 	spi_message_add_tail(t, &host->m);
 
@@ -570,7 +581,7 @@ mmc_spi_setup_data_message(
 	 * the next token (next data block, or STOP_TRAN).  We can try to
 	 * minimize I/O ops by using a single read to collect end-of-busy.
 	 */
-	if (multiple || direction == DMA_TO_DEVICE) {
+	if (direction == DMA_TO_DEVICE) {
 		t = &host->early_status;
 		memset(t, 0, sizeof(*t));
 		t->len = (direction == DMA_TO_DEVICE) ? sizeof(scratch->status) : 1;

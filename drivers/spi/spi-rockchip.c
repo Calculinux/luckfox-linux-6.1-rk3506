@@ -186,6 +186,8 @@ struct rockchip_spi_quirks {
 	u32 max_baud_div_in_cpha;
 };
 
+#define ROCKCHIP_SPI_NCFG	7
+
 struct rockchip_spi {
 	struct device *dev;
 
@@ -235,9 +237,43 @@ struct rockchip_spi {
 	phys_addr_t base_addr_phy;
 	struct miscdevice miscdev;
 
+	/*
+	 * What rockchip_spi_config() last wrote to each of its registers.
+	 * Writing a register that already holds the value is not free: it
+	 * is a bus access, and on this SoC an access to a SPI controller
+	 * holds up the M0 core's writes to a GPIO (the PicoCalc's audio) for
+	 * as long as it takes. mmc_spi sends a run of short transfers of
+	 * the same kind, so most of these writes would change nothing.
+	 */
+	u32 cfg[ROCKCHIP_SPI_NCFG];
+	u32 cfg_valid;
+
 	/* quirks */
 	u32 max_baud_div_in_cpha;
 };
+
+/* The registers in cfg[] */
+enum {
+	ROCKCHIP_SPI_CFG_CTRLR0,
+	ROCKCHIP_SPI_CFG_CTRLR1,
+	ROCKCHIP_SPI_CFG_RXFTLR,
+	ROCKCHIP_SPI_CFG_DMATDLR,
+	ROCKCHIP_SPI_CFG_DMARDLR,
+	ROCKCHIP_SPI_CFG_DMACR,
+	ROCKCHIP_SPI_CFG_BAUDR,
+};
+
+/* Write a configuration register, unless it is known to hold the value */
+static inline void rockchip_spi_cfg_write(struct rockchip_spi *rs,
+					  unsigned int idx, u32 val,
+					  unsigned int reg)
+{
+	if ((rs->cfg_valid & BIT(idx)) && rs->cfg[idx] == val)
+		return;
+	writel_relaxed(val, rs->regs + reg);
+	rs->cfg[idx] = val;
+	rs->cfg_valid |= BIT(idx);
+}
 
 static inline void spi_enable_chip(struct rockchip_spi *rs, bool enable)
 {
@@ -331,6 +367,7 @@ static void rockchip_spi_handle_err(struct spi_controller *ctlr,
 	 * this also flushes both rx and tx fifos
 	 */
 	spi_enable_chip(rs, false);
+	rs->cfg_valid = 0;
 
 	/* make sure all interrupts are masked and status cleared */
 	writel_relaxed(0, rs->regs + ROCKCHIP_SPI_IMR);
@@ -717,22 +754,26 @@ static int rockchip_spi_config(struct rockchip_spi *rs,
 					     rs->dev->pins->default_state);
 	}
 
-	writel_relaxed(cr0, rs->regs + ROCKCHIP_SPI_CTRLR0);
-	writel_relaxed(cr1, rs->regs + ROCKCHIP_SPI_CTRLR1);
+	rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_CTRLR0, cr0, ROCKCHIP_SPI_CTRLR0);
+	rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_CTRLR1, cr1, ROCKCHIP_SPI_CTRLR1);
 
 	/* unfortunately setting the fifo threshold level to generate an
 	 * interrupt exactly when the fifo is full doesn't seem to work,
 	 * so we need the strict inequality here
 	 */
 	if ((xfer->len / rs->n_bytes) < rs->fifo_len)
-		writel_relaxed(xfer->len / rs->n_bytes - 1, rs->regs + ROCKCHIP_SPI_RXFTLR);
+		rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_RXFTLR,
+				       xfer->len / rs->n_bytes - 1, ROCKCHIP_SPI_RXFTLR);
 	else
-		writel_relaxed(rs->fifo_len / 2 - 1, rs->regs + ROCKCHIP_SPI_RXFTLR);
+		rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_RXFTLR,
+				       rs->fifo_len / 2 - 1, ROCKCHIP_SPI_RXFTLR);
 
-	writel_relaxed(rs->fifo_len / 2 - 1, rs->regs + ROCKCHIP_SPI_DMATDLR);
+	rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_DMATDLR,
+			       rs->fifo_len / 2 - 1, ROCKCHIP_SPI_DMATDLR);
 	rs->xfer_rx_burst = rockchip_spi_rx_burst(rs, xfer->len / rs->n_bytes);
-	writel_relaxed(rs->xfer_rx_burst - 1, rs->regs + ROCKCHIP_SPI_DMARDLR);
-	writel_relaxed(dmacr, rs->regs + ROCKCHIP_SPI_DMACR);
+	rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_DMARDLR,
+			       rs->xfer_rx_burst - 1, ROCKCHIP_SPI_DMARDLR);
+	rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_DMACR, dmacr, ROCKCHIP_SPI_DMACR);
 
 	if (rs->max_baud_div_in_cpha && xfer->speed_hz != rs->speed_hz) {
 		/* the minimum divisor is 2 */
@@ -751,8 +792,9 @@ static int rockchip_spi_config(struct rockchip_spi *rs,
 	 * round divisor = spiclk / speed up to nearest even number
 	 * so that the resulting speed is <= the requested speed
 	 */
-	writel_relaxed(2 * DIV_ROUND_UP(rs->freq, 2 * xfer->speed_hz),
-			rs->regs + ROCKCHIP_SPI_BAUDR);
+	rockchip_spi_cfg_write(rs, ROCKCHIP_SPI_CFG_BAUDR,
+			       2 * DIV_ROUND_UP(rs->freq, 2 * xfer->speed_hz),
+			       ROCKCHIP_SPI_BAUDR);
 	rs->speed_hz = xfer->speed_hz;
 
 	return 0;
@@ -928,6 +970,7 @@ static int rockchip_spi_setup(struct spi_device *spi)
 		cr0 |= CR0_OPM_SLAVE << CR0_OPM_OFFSET;
 
 	writel_relaxed(cr0, rs->regs + ROCKCHIP_SPI_CTRLR0);
+	rs->cfg_valid = 0;
 
 	pm_runtime_put(rs->dev);
 
@@ -1395,6 +1438,9 @@ static int rockchip_spi_runtime_resume(struct device *dev)
 
 	if (rs->retry_poll)
 		rs->retry_poll_active = false;
+
+	/* The clocks were off: do not trust what we think the registers hold */
+	rs->cfg_valid = 0;
 
 	return 0;
 }
