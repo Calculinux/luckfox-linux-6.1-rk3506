@@ -13,6 +13,7 @@
 #include <linux/sched.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
 #include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/dma-direction.h>
@@ -97,9 +98,11 @@
 
 /* "scratch" is per-{command,block} data exchanged with the card */
 struct scratch {
+	/* crc_val and status[0] are adjacent: a multiblock read collects the
+	 * CRC and the N(AC) byte after it in one transfer */
+	__be16			crc_val;
 	u8			status[29];
 	u8			data_token;
-	__be16			crc_val;
 };
 
 struct mmc_spi_host {
@@ -127,7 +130,60 @@ struct mmc_spi_host {
 	 * This is our source of those ones.
 	 */
 	void			*ones;
+
+	/* Retries of a card that is in the slot but did not enumerate */
+	struct delayed_work	cd_retry;
+	unsigned int		cd_retries;
 };
+
+/*
+ * With a card-detect GPIO the core scans once at start and once per CD edge,
+ * where polling (which this replaces) would try again every second. A card
+ * that is not ready at that one attempt (still busy after a reset that did
+ * not cut its power, or slow to wake) is then never seen. So, when the CD
+ * pin says a card is there but none came up, scan again a few times, 2 s
+ * apart. No traffic otherwise, once a card is enumerated or absent.
+ */
+#define MMC_SPI_CD_RETRY_MS	2000
+#define MMC_SPI_CD_RETRIES	30
+
+/* As the core's own handler, which is not exported, plus the retries */
+static irqreturn_t mmc_spi_cd_irq(int irq, void *dev_id)
+{
+	struct mmc_host *mmc = dev_id;
+	struct mmc_spi_host *host = mmc_priv(mmc);
+
+	mmc->trigger_card_event = true;
+	mmc_detect_change(mmc, msecs_to_jiffies(200));
+	host->cd_retries = 0;
+	mod_delayed_work(system_wq, &host->cd_retry,
+			 msecs_to_jiffies(MMC_SPI_CD_RETRY_MS));
+	return IRQ_HANDLED;
+}
+
+static void mmc_spi_cd_retry(struct work_struct *work)
+{
+	struct mmc_spi_host *host =
+		container_of(to_delayed_work(work), struct mmc_spi_host, cd_retry);
+	struct mmc_host *mmc = host->mmc;
+
+	if (READ_ONCE(mmc->card) || mmc_gpio_get_cd(mmc) <= 0) {
+		host->cd_retries = 0;
+		return;
+	}
+	if (host->cd_retries++ >= MMC_SPI_CD_RETRIES) {
+		dev_warn(&host->spi->dev, "card detected but does not respond\n");
+		return;
+	}
+	/*
+	 * Scheduled work, not a real CD edge: take the non-IRQ detection
+	 * path, so that retries of a card that does not respond do not
+	 * renew the host wakeup source and pin the system awake.
+	 */
+	_mmc_detect_change(mmc, 0, false);
+	schedule_delayed_work(&host->cd_retry,
+			      msecs_to_jiffies(MMC_SPI_CD_RETRY_MS));
+}
 
 
 /****************************************************************************/
@@ -553,6 +609,15 @@ mmc_spi_setup_data_message(
 	} else {
 		t->tx_buf = host->ones;
 		t->rx_buf = &scratch->crc_val;
+		if (multiple) {
+			/* The one byte that follows the CRC (below) is read
+			 * with it: one transfer less per block, and each
+			 * transfer costs the controller's registers a
+			 * round of writes.
+			 */
+			t->len = 3;
+			t->cs_change = 1;
+		}
 	}
 	spi_message_add_tail(t, &host->m);
 
@@ -570,7 +635,7 @@ mmc_spi_setup_data_message(
 	 * the next token (next data block, or STOP_TRAN).  We can try to
 	 * minimize I/O ops by using a single read to collect end-of-busy.
 	 */
-	if (multiple || direction == DMA_TO_DEVICE) {
+	if (direction == DMA_TO_DEVICE) {
 		t = &host->early_status;
 		memset(t, 0, sizeof(*t));
 		t->len = (direction == DMA_TO_DEVICE) ? sizeof(scratch->status) : 1;
@@ -1263,34 +1328,46 @@ static int mmc_spi_probe(struct spi_device *spi)
 		mmc->caps2 |= host->pdata->caps2;
 	}
 
-	status = mmc_add_host(mmc);
-	if (status != 0)
-		goto fail_glue_init;
+	INIT_DELAYED_WORK(&host->cd_retry, mmc_spi_cd_retry);
 
 	/*
+	 * The card-detect and write-protect GPIOs must be in place before
+	 * mmc_add_host(): that starts the initial scan on another CPU at
+	 * once, and one that runs before the CD GPIO is set sees no CD
+	 * (-ENOSYS) and the core starts it without ever hearing about the
+	 * pin; its interrupt is only requested by mmc_start_host() if the
+	 * descriptor is there.
+	 *
 	 * Index 0 is card detect
 	 * Old boardfiles were specifying 1 ms as debounce
 	 */
 	status = mmc_gpiod_request_cd(mmc, NULL, 0, false, 1000);
 	if (status == -EPROBE_DEFER)
-		goto fail_gpiod_request;
+		goto fail_glue_init;
 	if (!status) {
 		/*
 		 * The platform has a CD GPIO signal that may support
-		 * interrupts, so let mmc_gpiod_request_cd_irq() decide
-		 * if polling is needed or not.
+		 * interrupts; mmc_start_host() requests the interrupt and
+		 * falls back to polling only if there is none.
 		 */
 		mmc->caps &= ~MMC_CAP_NEEDS_POLL;
-		mmc_gpiod_request_cd_irq(mmc);
+		mmc_gpio_set_cd_isr(mmc, mmc_spi_cd_irq);
 	}
-	mmc_detect_change(mmc, 0);
 
 	/* Index 1 is write protect/read only */
 	status = mmc_gpiod_request_ro(mmc, NULL, 1, 0);
 	if (status == -EPROBE_DEFER)
-		goto fail_gpiod_request;
+		goto fail_glue_init;
 	if (!status)
 		has_ro = true;
+
+	status = mmc_add_host(mmc);
+	if (status != 0)
+		goto fail_glue_init;
+
+	if (mmc->slot.cd_irq >= 0)
+		schedule_delayed_work(&host->cd_retry,
+				      msecs_to_jiffies(MMC_SPI_CD_RETRY_MS));
 
 	dev_info(&spi->dev, "SD/MMC host %s%s%s%s\n",
 			dev_name(&mmc->class_dev),
@@ -1301,8 +1378,6 @@ static int mmc_spi_probe(struct spi_device *spi)
 				? ", cd polling" : "");
 	return 0;
 
-fail_gpiod_request:
-	mmc_remove_host(mmc);
 fail_glue_init:
 	kfree(host->data);
 fail_nobuf1:
@@ -1324,6 +1399,7 @@ static void mmc_spi_remove(struct spi_device *spi)
 		host->pdata->exit(&spi->dev, mmc);
 
 	mmc_remove_host(mmc);
+	cancel_delayed_work_sync(&host->cd_retry);
 
 	kfree(host->data);
 	kfree(host->ones);

@@ -552,6 +552,11 @@ static inline struct mmc_host *mmc_from_priv(void *priv)
 #define mmc_classdev(x)	(&(x)->class_dev)
 #define mmc_hostname(x)	(dev_name(&(x)->class_dev))
 
+/*
+ * Non-IRQ variant of mmc_detect_change(); with cd_irq = false the host
+ * wakeup source is not renewed. For callers scheduled from process context.
+ */
+void _mmc_detect_change(struct mmc_host *, unsigned long delay, bool cd_irq);
 void mmc_detect_change(struct mmc_host *, unsigned long delay);
 void mmc_request_done(struct mmc_host *, struct mmc_request *);
 void mmc_command_done(struct mmc_host *host, struct mmc_request *mrq);
