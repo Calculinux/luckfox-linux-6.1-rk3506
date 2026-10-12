@@ -175,7 +175,12 @@ static void mmc_spi_cd_retry(struct work_struct *work)
 		dev_warn(&host->spi->dev, "card detected but does not respond\n");
 		return;
 	}
-	mmc_detect_change(mmc, 0);
+	/*
+	 * Scheduled work, not a real CD edge: take the non-IRQ detection
+	 * path, so that retries of a card that does not respond do not
+	 * renew the host wakeup source and pin the system awake.
+	 */
+	_mmc_detect_change(mmc, 0, false);
 	schedule_delayed_work(&host->cd_retry,
 			      msecs_to_jiffies(MMC_SPI_CD_RETRY_MS));
 }

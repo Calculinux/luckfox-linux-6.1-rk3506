@@ -263,12 +263,17 @@ enum {
 	ROCKCHIP_SPI_CFG_BAUDR,
 };
 
-/* Write a configuration register, unless it is known to hold the value */
+/*
+ * Write a configuration register, unless it is known to hold the value.
+ * When the misc device is built in its writable register mapping can
+ * change the hardware behind the driver's back, so never trust the cache.
+ */
 static inline void rockchip_spi_cfg_write(struct rockchip_spi *rs,
 					  unsigned int idx, u32 val,
 					  unsigned int reg)
 {
-	if ((rs->cfg_valid & BIT(idx)) && rs->cfg[idx] == val)
+	if (!IS_ENABLED(CONFIG_SPI_ROCKCHIP_MISCDEV) &&
+	    (rs->cfg_valid & BIT(idx)) && rs->cfg[idx] == val)
 		return;
 	writel_relaxed(val, rs->regs + reg);
 	rs->cfg[idx] = val;
